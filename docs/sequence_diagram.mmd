@@ -1,0 +1,158 @@
+---
+config:
+  theme: forest
+---
+sequenceDiagram
+    participant User
+    participant Main as main()
+    participant Server as ChatServer
+    participant AcceptThr as accept_thread_ (accept_clients)
+    participant Client1 as Client 1
+    participant ClientThr1 as client_thread_1 (handle_client)
+    participant Client2 as Client 2
+    participant ClientThr2 as client_thread_2 (handle_client)
+    participant OS as Operating System
+    User->>Main: Run executable [port]
+    Main->>Server: new ChatServer(port)
+    activate Server
+    Note over Server: Initialize port_, fd=-1, running=false
+    Server-->>Main: ChatServer instance
+    Main->>Server: start()
+    activate Server
+    Note over Server: Create Listening Socket
+    Server->>OS: socket()
+    OS-->>Server: server_fd
+    Server->>OS: setsockopt(SO_REUSEADDR)
+    OS-->>Server: success/fail
+    Server->>OS: bind(server_fd, port)
+    OS-->>Server: success/fail
+    Server->>OS: listen(server_fd)
+    OS-->>Server: success/fail
+    Note over Server: running_ = true
+    Server->>AcceptThr: std::thread(&ChatServer::accept_clients, this)
+    activate AcceptThr
+    Note over AcceptThr: Starts accept_clients() loop
+    Server-->>Main: true (started)
+    deactivate Server
+    Main->>User: "Server started. Press Enter to stop."
+    Note over Main: Waits (e.g., cin.get())
+    AcceptThr->>OS: accept(server_fd)
+    Note over AcceptThr, OS: Blocks waiting for connection
+    Client1->>OS: Connect(Server IP, port)
+    OS-->>AcceptThr: New connection, return client_fd1
+    AcceptThr->>AcceptThr: Log connection (IP:...)
+    Note over AcceptThr: Acquire Mutex
+    AcceptThr->>Server: clients_mutex_.lock()
+    activate Server #LightBlue
+    AcceptThr->>Server: client_sockets_.push_back(client_fd1)
+    AcceptThr->>ClientThr1: std::thread(&ChatServer::handle_client, this, client_fd1)
+    activate ClientThr1
+    AcceptThr->>Server: client_threads_.emplace_back(new_thread)
+    Note over AcceptThr: Release Mutex
+    AcceptThr->>Server: clients_mutex_.unlock()
+    deactivate Server #LightBlue
+    ClientThr1->>OS: recv(client_fd1)
+    Note over ClientThr1, OS: Blocks waiting for data
+    AcceptThr->>OS: accept(server_fd)
+    Note over AcceptThr, OS: Blocks waiting for next connection
+    Client2->>OS: Connect(Server IP, port)
+    OS-->>AcceptThr: New connection, return client_fd2
+    AcceptThr->>AcceptThr: Log connection (IP:...)
+    Note over AcceptThr: Acquire Mutex
+    AcceptThr->>Server: clients_mutex_.lock()
+    activate Server #LightBlue
+    AcceptThr->>Server: client_sockets_.push_back(client_fd2)
+    AcceptThr->>ClientThr2: std::thread(&ChatServer::handle_client, this, client_fd2)
+    activate ClientThr2
+    AcceptThr->>Server: client_threads_.emplace_back(new_thread)
+    Note over AcceptThr: Release Mutex
+    AcceptThr->>Server: clients_mutex_.unlock()
+    deactivate Server #LightBlue
+    ClientThr2->>OS: recv(client_fd2)
+    Note over ClientThr2, OS: Blocks waiting for data
+    AcceptThr->>OS: accept(server_fd)
+    Note over AcceptThr, OS: Blocks waiting for next connection
+    Client1->>OS: send("Hello!")
+    OS-->>ClientThr1: recv() returns "Hello!"
+    ClientThr1->>ClientThr1: Log "Received from Client<fd1>: Hello!"
+    ClientThr1->>Server: broadcast_message("Client<fd1>: Hello!", client_fd1)
+    activate Server #LightCyan
+    Note over Server: Acquire Mutex
+    Server->>Server: clients_mutex_.lock()
+    activate Server #LightBlue
+    Note over Server: Loop through client_sockets_ [fd1, fd2]
+    Server->>OS: send(client_fd2, "Client<fd1>: Hello!") # Send to Client 2
+    OS->>Client2: Delivers message data
+    Note over Server: Skips sender (fd1)
+    Note over Server: Release Mutex
+    Server->>Server: clients_mutex_.unlock()
+    deactivate Server #LightBlue
+    Server-->>ClientThr1: return (void)
+    deactivate Server #LightCyan
+    ClientThr1->>OS: recv(client_fd1)
+    Note over ClientThr1, OS: Blocks waiting for data
+    Note right of ClientThr2: OS delivers data to client_fd2
+    OS-->>ClientThr2: recv() returns "Client<fd1>: Hello!"
+    ClientThr2->>ClientThr2: Log "Received from Client<fd2>: Client<fd1>: Hello!"
+    ClientThr2->>Server: broadcast_message("Client<fd2>: Client<fd1>: Hello!", client_fd2)
+    activate Server #LightCyan
+        Note over Server: (Broadcast logic similar to above, sends to Client 1)
+        Server->>OS: send(client_fd1, "Client<fd2>: Client<fd1>: Hello!")
+    deactivate Server #LightCyan
+    ClientThr2->>OS: recv(client_fd2)
+    Note over ClientThr2, OS: Blocks waiting for data
+    Client1->>OS: Close connection
+    OS-->>ClientThr1: recv() returns 0 (or -1 on error)
+    ClientThr1->>ClientThr1: Log "Client<fd1> disconnected."
+    Note over ClientThr1: Exits recv loop
+    ClientThr1->>OS: close(client_fd1)
+    Note over ClientThr1: Acquire Mutex
+    ClientThr1->>Server: clients_mutex_.lock()
+    activate Server #LightBlue
+    ClientThr1->>Server: remove client_fd1 from client_sockets_
+    Note over ClientThr1: Release Mutex
+    ClientThr1->>Server: clients_mutex_.unlock()
+    deactivate Server #LightBlue
+    ClientThr1->>ClientThr1: Log cleanup message
+    deactivate ClientThr1
+    Note over ClientThr1: Thread finishes execution
+    User->>Main: Presses Enter
+    Note over Main: cin.get() returns
+    Main->>Server: stop()
+    activate Server
+    Server->>Server: running_ = false
+    Note over Server: Signal accept thread to stop
+    Server->>OS: shutdown(server_fd)
+    Server->>OS: close(server_fd)
+    OS -->> AcceptThr: accept() returns error (due to close)
+    AcceptThr->>AcceptThr: Exits accept_clients loop
+    Server->>AcceptThr: accept_thread_.join()
+    Note over Server, AcceptThr: Waits for accept_thread_ to finish
+    deactivate AcceptThr
+    Server->>Server: cleanup_clients()
+    activate Server #Orange
+        Note over Server: Acquire Mutex
+        Server->>Server: clients_mutex_.lock()
+        activate Server #LightBlue
+        Note over Server: Loop through remaining client_sockets_ [fd2]
+        Server->>OS: shutdown(client_fd2)
+        Server->>OS: close(client_fd2)
+        OS -->> ClientThr2: recv() returns 0 or -1 (due to close)
+        ClientThr2->>ClientThr2: Cleanup logic (close, remove from list - might race slightly here, but ok)
+        deactivate ClientThr2 # Client 2 thread finishes
+        Server->>Server: client_sockets_.clear()
+        Note over Server: Release Mutex
+        Server->>Server: clients_mutex_.unlock()
+        deactivate Server #LightBlue
+    deactivate Server #Orange
+    Server->>Server: cleanup_threads()
+     activate Server #Green
+        Note over Server: Loop through client_threads_
+        Note over Server: Joins ClientThr1 (already finished)
+        Server->>ClientThr2: join() # Waits for thread 2 (already finished after cleanup_clients)
+        Note over Server: Clears client_threads_ vector
+     deactivate Server #Green
+    Server-->>Main: return (void)
+    deactivate Server
+    Main->>User: Exits program
+    Note over Server: Destructor ~ChatServer() runs (may do redundant checks/cleanup)
